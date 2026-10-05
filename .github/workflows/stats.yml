@@ -1,0 +1,27 @@
+# Her gün Hugging Face'teki en yeni sezonla stats/*.json'u yeniden üretir; değiştiyse depoya koyar (uygulama raw URL'den indirir).
+name: stats
+on:
+  schedule: [{cron: "0 5 * * *"}]
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install pyarrow
+      - name: En yeni sezonu indir
+        # ponytail: yeni sezonun ilk günlerinde veri az (Bayes yumuşatma idare eder); gerekirse önceki sezonla birleştir
+        run: |
+          F=$(curl -sf https://huggingface.co/api/datasets/EliF77/brawlstars-ranked | python -c "import json,re,sys; f=[s['rfilename'] for s in json.load(sys.stdin)['siblings'] if s['rfilename'].endswith('.parquet')]; print(max(f, key=lambda x: int(re.search(r'season(\d+)', x).group(1))))")
+          S=$(echo "$F" | grep -o 'season[0-9]*' | tail -1)
+          curl -sfL -o "$S.parquet" "https://huggingface.co/datasets/EliF77/brawlstars-ranked/resolve/main/$F"
+          echo "S=$S" >> "$GITHUB_ENV"
+      - run: python build_stats.py "$S.parquet"
+      - run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add stats
+          git diff --cached --quiet || { git commit -m "stats: $S" && git push; }

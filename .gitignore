@@ -1,0 +1,6 @@
+# Depo yalnız veri hattı: istatistikler + üreten betik. Geri kalan her şey (.env, android, data, icons...) yerel kalır.
+/*
+!/.gitignore
+!/build_stats.py
+!/stats/
+!/.github/
