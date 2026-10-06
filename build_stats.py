@@ -9,6 +9,7 @@ aralık verilirse yalnız altı oyuncunun ortalaması bu aralıkta olan setler s
 """
 import json
 import sys
+import urllib.request
 from pathlib import Path
 
 import pyarrow.compute as pc
@@ -39,7 +40,22 @@ def nest(flat):
     return out
 
 
-def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None):
+def tr_names(maps):
+    """{Türkçe harita adı: İngilizce}: oyun Türkçeyken ekranda Türkçe ad çıkıyor. BrawlAPI her oyun güncellemesinde oyun
+    dosyalarından (locations + localization) yeniden üretiyor. Alınamazsa boş; main eski dosyadakini korur."""
+    try:
+        # Python'un varsayılan User-Agent'ına 403 dönüyor.
+        get = lambda p: json.load(urllib.request.urlopen(urllib.request.Request(
+            f"https://api.brawlapi.com/game/{p}", headers={"User-Agent": "genes-drafter"}), timeout=120))
+        en, tr, loc = get("localization/texts"), get("localization/tr"), get("csv_logic/locations")
+    except Exception as e:
+        print("Türkçe harita adları alınamadı:", e)
+        return {}
+    tids = {r["TID"] for r in loc.values() if r.get("TID") in en and r["TID"] in tr}
+    return {tr[t]["TR"]: en[t]["EN"] for t in tids if en[t]["EN"] in maps}
+
+
+def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None):
     t = pq.read_table(path, columns=["map", "record", "avg_elo", "battle_time", *TEAMS[0], *TEAMS[1]])
     valid = pc.is_valid(t["map"])
     if ranks:
@@ -72,6 +88,8 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None):
         "map": nest(map_),
         "vs": nest(vs),
         "with": nest(with_),
+        # Türkçe adlar alınamadıysa eski dosyadakiler kalır.
+        "tr": tr or (json.loads(Path(out).read_text(encoding="utf-8")).get("tr", {}) if Path(out).exists() else {}),
         **({"weights": weights} if weights else {}),  # yoksa motorlar varsayılan ağırlıkları kullanır
     }
     Path(out).parent.mkdir(exist_ok=True)
@@ -80,5 +98,6 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None):
 
 
 if __name__ == "__main__":
+    tr = tr_names(set(pq.read_table(sys.argv[1], columns=["map"])["map"].unique().drop_null().to_pylist()))
     for name, ranks in BANDS.items():
-        main(sys.argv[1], ranks, STATS_DIR / f"{name}.json", WEIGHTS.get(name))
+        main(sys.argv[1], ranks, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr)
