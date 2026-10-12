@@ -26,6 +26,16 @@ BANDS = {"elmas": "10-12", "gizemli": "13-15", "efsanevi": "16-22"}
 # Efsanevi pop .2 denendi (2026-10-05): Usta/Pro YouTube ilk 3 örtüşmesi %33 -> %38 ama backtest kazanma farkı artmadı -> geri alındı.
 WEIGHTS = {}
 STATS_DIR = Path(__file__).parent / "stats"
+# Sezon başı koruması. Hat yeni sezonun dosyasına çıktığı gün geçiyor; üst bantlarda ilk günlerde veri yok denecek kadar az
+# (season54 1. gün Efsanevi: 27 set, 58 savaşçı, 17 harita; uygulama o dosyayla savaşçıların yarısını tanıyamazdı).
+# Bant MIN_SETS'e ulaşana kadar komşu bantlarla birlikte üretilir (önce alta, en alttaysa üste doğru genişler); bütün
+# bantlar birlikte de azsa dosya yazılmaz, önceki sezonunki kalır.
+# Eşik 53->54 geçişinden (2026-10-12, backtest farkı, aynı test maçları). Efsanevi kendi verisiyle / Gizemli'yle birlikte:
+# 6K sette %1,9 / %4,2, 20K'da %2,6 / %3,3, 60K'da %4,3 / %3,6. Önceki sezon tek başına %2,6-2,8; yeni sezonun 2K seti
+# onun gerisinde (Gizemli %2,3'e %3,1), 16-24K seti önünde (Gizemli %3,75'e %3,14; Elmas %2,16'ya %1,26). Eskiyle yeniyi
+# birleştirmek kazandırmadı (büyük eski sezon yeniyi bastırıyor).
+MIN_SETS = 30000
+STALE_DAYS = 6  # son maç bundan eskiyse stale() haber verir; kaynak 3 güne kadar olağan gecikiyor
 
 
 def acc(table, keys, win, sink):
@@ -192,7 +202,33 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
     print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita -> {out}")
 
 
+def band_ranks(elo, ranks):
+    """Bant MIN_SETS'ten azsa komşu bantlarla genişler: önce alta ("16-22" -> "13-22" -> "10-22"), en alttaysa üste
+    ("10-12" -> "10-15" -> "10-22"); hepsi birlikte de azsa None."""
+    lo, hi = map(int, ranks.split("-"))
+    edges = sorted(tuple(map(int, r.split("-"))) for r in BANDS.values())
+    wider = [(l, hi) for l, _ in reversed(edges) if l <= lo] + [(edges[0][0], h) for _, h in edges if h > hi]
+    for l, h in wider:
+        if int(((elo >= l) & (elo < h + 1)).sum()) >= MIN_SETS:
+            return f"{l}-{h}"
+
+
+def stale(today=None, stats_dir=STATS_DIR):
+    """Son maçı STALE_DAYS'ten eski rank dosyaları varsa hata metni, yoksa None (stats.yml: iş kırmızıya döner, GitHub e-posta atar)."""
+    import datetime
+    limit = ((today or datetime.date.today()) - datetime.timedelta(days=STALE_DAYS)).strftime("%Y%m%d")
+    old = {n: json.loads((Path(stats_dir) / f"{n}.json").read_text(encoding="utf-8")).get("updated", "") for n in BANDS}
+    print("son maç günleri:", old)
+    bad = {n: d for n, d in old.items() if d < limit}
+    return f"bayat veri (son maç {limit} öncesi): {bad}" if bad else None
+
+
 if __name__ == "__main__":
     tr = tr_names(set(pq.read_table(sys.argv[1], columns=["map"])["map"].unique().drop_null().to_pylist()))
+    elo = pq.read_table(sys.argv[1], columns=["avg_elo"])["avg_elo"].to_numpy(zero_copy_only=False)
     for name, ranks in BANDS.items():
-        main(sys.argv[1], ranks, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr)
+        use = band_ranks(elo, ranks)
+        if use is None:
+            print(f"{name}: {MIN_SETS} setten az veri, dosya yazılmadı (eskisi kalıyor)")
+            continue
+        main(sys.argv[1], use, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr)

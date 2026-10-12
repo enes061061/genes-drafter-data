@@ -13,7 +13,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install pyarrow scipy  # scipy: kazanma modeli (build_stats.Model)
       - name: En yeni sezonu indir
-        # ponytail: yeni sezonun ilk günlerinde veri az (Bayes yumuşatma idare eder); gerekirse önceki sezonla birleştir
+        # Yeni sezonun ilk günlerinde veri az: build_stats.MIN_SETS bandı komşu bantlarla genişletir, o da yetmezse eski dosyayı bırakır.
         run: |
           F=$(curl -sf https://huggingface.co/api/datasets/EliF77/brawlstars-ranked | python -c "import json,re,sys; f=[s['rfilename'] for s in json.load(sys.stdin)['siblings'] if s['rfilename'].endswith('.parquet')]; print(max(f, key=lambda x: int(re.search(r'season(\d+)', x).group(1))))")
           S=$(echo "$F" | grep -o 'season[0-9]*' | tail -1)
@@ -25,3 +25,7 @@ jobs:
           git config user.email github-actions@users.noreply.github.com
           git add stats
           git diff --cached --quiet || { git commit -m "stats: $S" && git push; }
+      - name: Veri bayatsa haber ver
+        # Dosyalar yukarıda yayınlandı; son maç STALE_DAYS'ten eskiyse iş kırmızıya döner ve GitHub depo sahibine e-posta atar
+        # (kaynak durdu, ya da yeni sezon günlerdir MIN_SETS'e ulaşamadı).
+        run: python -c "import build_stats, sys; sys.exit(build_stats.stale())"
