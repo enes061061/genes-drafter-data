@@ -27,7 +27,8 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
           git add stats
-          git diff --cached --quiet || { git commit -m "stats: $S" && git push; }
+          # Araya başka bir push girdiyse (elle başlatılan iş, depoya yapılan değişiklik) önce üstüne al: 2026-10-14'te bu yüzden düştü.
+          git diff --cached --quiet || { git commit -m "stats: $S" && git pull -q --rebase && git push; }
       - name: Veri bayatsa haber ver
         # Dosyalar yukarıda yayınlandı; son maç STALE_DAYS'ten eskiyse iş kırmızıya döner ve GitHub depo sahibine e-posta atar
         # (kaynak durdu, ya da yeni sezon günlerdir MIN_SETS'e ulaşamadı).
