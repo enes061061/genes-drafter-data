@@ -1,7 +1,10 @@
 # Her gün Hugging Face'teki en yeni sezonla stats/*.json'u yeniden üretir; değiştiyse depoya koyar (uygulama raw URL'den indirir).
 name: stats
 on:
-  schedule: [{cron: "0 5 * * *"}]
+  # 6 saatte bir: kaynak gün içinde farklı saatlerde güncelleniyor (2026-10-14: 19:51 UTC), GitHub zamanlanmış işi de
+  # saatlerce geciktiriyor (05:00 yerine 10-12). Yeni veri yoksa dosyalar aynı çıkar, commit olmaz. Sezon başında yeni
+  # haritalar da en geç birkaç saatte gelir.
+  schedule: [{cron: "0 */6 * * *"}]
   workflow_dispatch:
 permissions: {contents: write}
 jobs:
