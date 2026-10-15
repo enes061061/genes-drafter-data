@@ -152,8 +152,9 @@ def tr_names(maps):
     return {tr[t]["TR"]: en[t]["EN"] for t in tids if en[t]["EN"] in maps}
 
 
-def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True):
-    """fit: kazanma modelini de eğit (stats json "model"; backtest/model.py kendi eğitir, kapatır)."""
+def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True, publish=True):
+    """fit: kazanma modelini de eğit (stats json "model"; backtest/model.py kendi eğitir, kapatır). publish: yayına uygunluk
+    (check) da aranır; küçük veriyle hesap denemesi (test_engine.py) kapatır."""
     t = pq.read_table(path, columns=["map", "record", "avg_elo", "battle_time", *TEAMS[0], *TEAMS[1], *ELO[0], *ELO[1]])
     valid = pc.is_valid(t["map"])
     if ranks:
@@ -197,7 +198,8 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
             ok = pc.and_(ok, pc.is_valid(t[c]))
         mdl = Model(sorted(stats["all"]), sorted(stats["map"]))
         stats["model"] = mdl.fit(*mdl.design(t.filter(ok)), LAM).export()
-    check(stats)
+    if publish:
+        check(stats)
     Path(out).parent.mkdir(exist_ok=True)
     Path(out).write_text(json.dumps(stats, separators=(",", ":")), encoding="utf-8")
     print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita -> {out}")
