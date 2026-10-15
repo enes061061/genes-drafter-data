@@ -36,6 +36,9 @@ STATS_DIR = Path(__file__).parent / "stats"
 # birleştirmek kazandırmadı (büyük eski sezon yeniyi bastırıyor).
 MIN_SETS = 30000
 STALE_DAYS = 6  # son maç bundan eskiyse stale() haber verir; kaynak 3 güne kadar olağan gecikiyor
+# Oyunda yazan ama BrawlAPI çevirisinde farklı olan Türkçe harita adları (çeviride "Güvenli Bölge"; oyunda "Güvenli Alan",
+# Göktuğ 2026-10-15, Türkçe oyuncular bu haritada "Harita okunamadı" alıyordu).
+TR_ALIAS = {"Güvenli Alan": "Safe Zone"}
 
 
 def acc(table, keys, win, sink):
@@ -190,6 +193,7 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
         "tr": tr or (json.loads(Path(out).read_text(encoding="utf-8")).get("tr", {}) if Path(out).exists() else {}),
         **({"weights": weights} if weights else {}),  # yoksa motorlar varsayılan ağırlıkları kullanır
     }
+    stats["tr"].update({k: v for k, v in TR_ALIAS.items() if v in stats["map"]})
     if fit:
         # Tam kompozisyon kazanma modeli (model.py ile denendi, 2026-10-07): uygulama varsa bunu, yoksa eski puanı kullanır.
         ok = pc.is_valid(t[ELO[0][0]])
