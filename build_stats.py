@@ -197,9 +197,25 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
             ok = pc.and_(ok, pc.is_valid(t[c]))
         mdl = Model(sorted(stats["all"]), sorted(stats["map"]))
         stats["model"] = mdl.fit(*mdl.design(t.filter(ok)), LAM).export()
+    check(stats)
     Path(out).parent.mkdir(exist_ok=True)
     Path(out).write_text(json.dumps(stats, separators=(",", ":")), encoding="utf-8")
     print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita -> {out}")
+
+
+def check(stats):
+    """Yazmadan (stats.yml'de yayından) önce: uygulamanın Engine'inin okuduğu alanlar dolu, sayılar geçerli, model katsayıları
+    sonlu. Değilse hata: iş kırmızıya döner, commit olmaz, telefonlarda eski dosya kalır."""
+    def need(ok, why):
+        if not ok:
+            raise ValueError(f"stats yayınlanmadı: {why}")
+    need(len(stats["all"]) >= 50 and len(stats["map"]) >= 3, f"{len(stats['all'])} savaşçı, {len(stats['map'])} harita")
+    rows = list(stats["all"].values()) + [gw for k in ("map", "vs", "with") for inner in stats[k].values() for gw in inner.values()]
+    need(all(g >= w >= 0 for g, w in rows), "maç/galibiyet sayısı bozuk")
+    m = stats.get("model")
+    if m:
+        coef = list(m["main"].values()) + [x for k in ("map", "syn", "vs") for inner in m[k].values() for x in inner.values()]
+        need(m["main"] and all(np.isfinite(coef)), "model katsayısı boş ya da sonsuz")
 
 
 def band_ranks(elo, ranks):
