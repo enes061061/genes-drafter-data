@@ -137,23 +137,53 @@ class Model:
                 "syn": tri(self.S), "vs": tri(self.V)}
 
 
-def tr_names(maps):
-    """{Türkçe harita adı: İngilizce}: oyun Türkçeyken ekranda Türkçe ad çıkıyor. BrawlAPI her oyun güncellemesinde oyun
-    dosyalarından (locations + localization) yeniden üretiyor. Alınamazsa boş; main eski dosyadakini korur."""
+# BrawlAPI GameModeVariation -> veri setinin `mode` sütunu
+MODES = {"Bounty": "bounty", "BrawlBall": "brawlBall", "GemGrab": "gemGrab", "Heist": "heist", "KingOfHill": "hotZone", "Knockout": "knockout"}
+
+
+def game(maps):
+    """BrawlAPI'nin her oyun güncellemesinde oyun dosyalarından ürettiği: ({Türkçe harita adı: İngilizce}, {dereceli havuzdaki
+    harita: mod}). Türkçe ad: oyun Türkçeyken ekranda Türkçe ad çıkıyor. Alınamazsa ikisi de boş; main eski Türkçe adları korur."""
     try:
         # Python'un varsayılan User-Agent'ına 403 dönüyor.
         get = lambda p: json.load(urllib.request.urlopen(urllib.request.Request(
             f"https://api.brawlapi.com/game/{p}", headers={"User-Agent": "genes-drafter"}), timeout=120))
-        en, tr, loc = get("localization/texts"), get("localization/tr"), get("csv_logic/locations")
+        en, tr, loc, ranked = (get(p) for p in ("localization/texts", "localization/tr", "csv_logic/locations", "csv_logic/ranked_locations"))
     except Exception as e:
-        print("Türkçe harita adları alınamadı:", e)
-        return {}
+        print("BrawlAPI oyun dosyaları alınamadı:", e)
+        return {}, {}
+    pool = {en[loc[k]["TID"]]["EN"]: MODES[loc[k]["GameModeVariation"]] for k, r in ranked.items()
+            if not r.get("Disabled") and loc.get(k, {}).get("TID") in en and loc[k].get("GameModeVariation") in MODES}
     tids = {r["TID"] for r in loc.values() if r.get("TID") in en and r["TID"] in tr}
-    return {tr[t]["TR"]: en[t]["EN"] for t in tids if en[t]["EN"] in maps}
+    # sorted: aynı Türkçe ad iki haritada (Open Space / Open Zone ikisi de "Açık Alan") her çalıştırmada aynı haritaya gitsin.
+    return {tr[t]["TR"]: en[t]["EN"] for t in sorted(tids) if en[t]["EN"] in maps | pool.keys()}, pool
 
 
-def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True):
-    """fit: kazanma modelini de eğit (stats json "model"; backtest/model.py kendi eğitir, kapatır)."""
+def guess(stats, path, pool):
+    """Havuzun veride olmayan haritaları (yeni sezon; kaynak yeni sezonu günler sonra yayınlıyor, 2026-10-15'te havuzun 12/18'i
+    yeniydi ve uygulama "Harita okunamadı" deyip ban önermiyordu): aynı moddaki haritaların toplamı, modelde ortalaması.
+    Uygulama adı tanır; gerçek veri gelince kendi sayıları yerini alır. Site bu haritaları listelemez (stats json "guess")."""
+    t = pq.read_table(path, columns=["map", "mode"]).group_by(["map", "mode"]).aggregate([]).to_pylist()
+    mode = {r["map"]: r["mode"] for r in t}
+    real = list(stats["map"])
+    stats["guess"] = []
+    for m, md in pool.items():
+        same = [x for x in real if mode.get(x) == md]
+        if m in stats["map"] or not same:
+            continue
+        agg = {}
+        for x in same:
+            for b, (g, w) in stats["map"][x].items():
+                agg[b] = [agg.get(b, [0, 0])[0] + g, agg.get(b, [0, 0])[1] + w]
+        stats["map"][m] = agg
+        if "model" in stats:
+            mm = stats["model"]["map"]
+            mm[m] = {b: round(sum(mm[x].get(b, 0) for x in same) / len(same), 4) for b in stats["model"]["main"]}
+        stats["guess"].append(m)
+
+
+def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True, pool=None):
+    """fit: kazanma modelini de eğit (stats json "model"; backtest/model.py kendi eğitir, kapatır). pool: dereceli havuz (game)."""
     t = pq.read_table(path, columns=["map", "record", "avg_elo", "battle_time", *TEAMS[0], *TEAMS[1], *ELO[0], *ELO[1]])
     valid = pc.is_valid(t["map"])
     if ranks:
@@ -197,9 +227,11 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
             ok = pc.and_(ok, pc.is_valid(t[c]))
         mdl = Model(sorted(stats["all"]), sorted(stats["map"]))
         stats["model"] = mdl.fit(*mdl.design(t.filter(ok)), LAM).export()
+    if pool:
+        guess(stats, path, pool)
     Path(out).parent.mkdir(exist_ok=True)
     Path(out).write_text(json.dumps(stats, separators=(",", ":")), encoding="utf-8")
-    print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita -> {out}")
+    print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita ({len(stats.get('guess', []))} tahmini) -> {out}")
 
 
 def band_ranks(elo, ranks):
@@ -224,11 +256,11 @@ def stale(today=None, stats_dir=STATS_DIR):
 
 
 if __name__ == "__main__":
-    tr = tr_names(set(pq.read_table(sys.argv[1], columns=["map"])["map"].unique().drop_null().to_pylist()))
+    tr, pool = game(set(pq.read_table(sys.argv[1], columns=["map"])["map"].unique().drop_null().to_pylist()))
     elo = pq.read_table(sys.argv[1], columns=["avg_elo"])["avg_elo"].to_numpy(zero_copy_only=False)
     for name, ranks in BANDS.items():
         use = band_ranks(elo, ranks)
         if use is None:
             print(f"{name}: {MIN_SETS} setten az veri, dosya yazılmadı (eskisi kalıyor)")
             continue
-        main(sys.argv[1], use, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr)
+        main(sys.argv[1], use, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr, pool=pool)
