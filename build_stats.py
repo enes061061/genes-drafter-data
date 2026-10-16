@@ -137,9 +137,15 @@ class Model:
                 "syn": tri(self.S), "vs": tri(self.V)}
 
 
+# Dereceli modların harita dosyası türleri (BrawlAPI locations GameModeVariation).
+RANKED_MODES = {"GemGrab", "BrawlBall", "KingOfHill", "Knockout", "Heist", "Bounty"}
+
+
 def tr_names(maps):
-    """{Türkçe harita adı: İngilizce}: oyun Türkçeyken ekranda Türkçe ad çıkıyor. BrawlAPI her oyun güncellemesinde oyun
-    dosyalarından (locations + localization) yeniden üretiyor. Alınamazsa boş; main eski dosyadakini korur."""
+    """({Türkçe harita adı: İngilizce}, dereceli modların bütün harita adları [İngilizce ve Türkçe]): oyun Türkçeyken ekranda
+    Türkçe ad çıkıyor. BrawlAPI her oyun güncellemesinde oyun dosyalarından (locations + localization) yeniden üretiyor.
+    İkinci liste "nodata" için: Disabled bayrağına bakılmaz (Safe(r) Zone oynanıyor ama Disabled). Alınamazsa boş; main
+    eski dosyadakini korur."""
     try:
         # Python'un varsayılan User-Agent'ına 403 dönüyor.
         get = lambda p: json.load(urllib.request.urlopen(urllib.request.Request(
@@ -147,12 +153,14 @@ def tr_names(maps):
         en, tr, loc = get("localization/texts"), get("localization/tr"), get("csv_logic/locations")
     except Exception as e:
         print("Türkçe harita adları alınamadı:", e)
-        return {}
+        return {}, []
     tids = {r["TID"] for r in loc.values() if r.get("TID") in en and r["TID"] in tr}
-    return {tr[t]["TR"]: en[t]["EN"] for t in tids if en[t]["EN"] in maps}
+    ranked = {r["TID"] for r in loc.values() if r.get("GameModeVariation") in RANKED_MODES and r.get("TID") in en}
+    return ({tr[t]["TR"]: en[t]["EN"] for t in tids if en[t]["EN"] in maps},
+            [(en[t]["EN"], tr.get(t, {}).get("TR")) for t in sorted(ranked)])
 
 
-def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True, publish=True):
+def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True, publish=True, game=None):
     """fit: kazanma modelini de eğit (stats json "model"; backtest/model.py kendi eğitir, kapatır). publish: yayına uygunluk
     (check) da aranır; küçük veriyle hesap denemesi (test_engine.py) kapatır."""
     t = pq.read_table(path, columns=["map", "record", "avg_elo", "battle_time", *TEAMS[0], *TEAMS[1], *ELO[0], *ELO[1]])
@@ -191,6 +199,13 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
         "tr": tr or (json.loads(Path(out).read_text(encoding="utf-8")).get("tr", {}) if Path(out).exists() else {}),
         **({"weights": weights} if weights else {}),  # yoksa motorlar varsayılan ağırlıkları kullanır
     }
+    # Oyunda olup bu dosyada verisi olmayan harita adları (havuza yeni giren, ör. 2026-10-16 Flowing Springs): uygulama
+    # adı okuyunca "Harita okunamadı" yerine "Yeni harita · veri yok" der. Öneri yine haritasız; veri uydurulmaz.
+    known = set(stats["map"]) | set(stats["tr"])
+    if game:
+        stats["nodata"] = sorted({n for en, trn in game for n in (en, trn) if n and en not in stats["map"] and n not in known})
+    else:
+        stats["nodata"] = json.loads(Path(out).read_text(encoding="utf-8")).get("nodata", []) if Path(out).exists() else []
     if fit:
         # Tam kompozisyon kazanma modeli (model.py ile denendi, 2026-10-07): uygulama varsa bunu, yoksa eski puanı kullanır.
         ok = pc.is_valid(t[ELO[0][0]])
@@ -242,11 +257,11 @@ def stale(today=None, stats_dir=STATS_DIR):
 
 
 if __name__ == "__main__":
-    tr = tr_names(set(pq.read_table(sys.argv[1], columns=["map"])["map"].unique().drop_null().to_pylist()))
+    tr, game = tr_names(set(pq.read_table(sys.argv[1], columns=["map"])["map"].unique().drop_null().to_pylist()))
     elo = pq.read_table(sys.argv[1], columns=["avg_elo"])["avg_elo"].to_numpy(zero_copy_only=False)
     for name, ranks in BANDS.items():
         use = band_ranks(elo, ranks)
         if use is None:
             print(f"{name}: {MIN_SETS} setten az veri, dosya yazılmadı (eskisi kalıyor)")
             continue
-        main(sys.argv[1], use, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr)
+        main(sys.argv[1], use, STATS_DIR / f"{name}.json", WEIGHTS.get(name), tr, game=game)
