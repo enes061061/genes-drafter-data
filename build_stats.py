@@ -187,16 +187,20 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
                 if a != b:
                     acc(t, [b, a], win, with_)
 
+    by_map = nest(map_)
     stats = {
         "source": Path(path).name + (f" rank {ranks}" if ranks else ""),
         "sets": t.num_rows,
         "updated": (pc.max(t["battle_time"]).as_py() or "")[:8],  # son maçın günü, YYYYMMDD (uygulama ana ekranda gösterir)
         "all": {b: list(gw) for (b,), gw in all_.items()},
-        "map": nest(map_),
+        "map": by_map,
         "vs": nest(vs),
         "with": nest(with_),
-        # Türkçe adlar alınamadıysa eski dosyadakiler kalır.
-        "tr": tr or (json.loads(Path(out).read_text(encoding="utf-8")).get("tr", {}) if Path(out).exists() else {}),
+        # Türkçe adlar alınamadıysa eski dosyadakiler kalır. Yalnız bu bantta verisi olan haritalar: sezonun bir bantta oynanmayan
+        # haritası (2026-10-19 Eşikte, Hızlı Yolculuk) Türkçe oyunda "okundu" sayılıp haritasız öneriliyordu; dışarıda kalan
+        # ad aşağıda nodata'ya girer (bağımsız inceleme 2026-10-19).
+        "tr": {k: v for k, v in (tr or (json.loads(Path(out).read_text(encoding="utf-8")).get("tr", {}) if Path(out).exists() else {})).items()
+               if v in by_map},
         **({"weights": weights} if weights else {}),  # yoksa motorlar varsayılan ağırlıkları kullanır
     }
     # Oyunda olup bu dosyada verisi olmayan harita adları (havuza yeni giren, ör. 2026-10-16 Flowing Springs): uygulama
