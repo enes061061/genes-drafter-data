@@ -160,6 +160,28 @@ def tr_names(maps):
             [(en[t]["EN"], tr.get(t, {}).get("TR")) for t in sorted(ranked)])
 
 
+def composition_stats(t, limit=12):
+    """Canonical triples; actual games/wins, ranked by a conservative Wilson score."""
+    counts = {}
+    for team, win in ((TEAMS[0], "w1"), (TEAMS[1], "w2")):
+        grouped = t.group_by(["map", *team]).aggregate([("g", "sum"), (win, "sum"), ("g", "count")])
+        for row in grouped.to_pylist():
+            names = tuple(sorted(row[c] for c in team))
+            if len(set(names)) != 3:
+                continue
+            key = (row["map"], names)
+            g, w, s = counts.get(key, (0, 0, 0))
+            counts[key] = (g + row["g_sum"], w + row[win + "_sum"], s + row["g_count"])
+    def conservative(r):
+        n, p, z = r["games"], r["wins"] / r["games"], 1.96
+        return (p + z*z/(2*n) - z*((p*(1-p) + z*z/(4*n))/n)**.5) / (1 + z*z/n)
+    result = {}
+    for (map_name, team), (g, w, s) in counts.items():
+        if g >= 20:
+            result.setdefault(map_name, []).append({"team": list(team), "games": g, "wins": w, "sets": s})
+    return {m: sorted(rows, key=conservative, reverse=True)[:limit] for m, rows in result.items()}
+
+
 def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None, fit=True, publish=True, game=None):
     """fit: kazanma modelini de eğit (stats json "model"; backtest/model.py kendi eğitir, kapatır). publish: yayına uygunluk
     (check) da aranır; küçük veriyle hesap denemesi (test_engine.py) kapatır."""
@@ -196,6 +218,7 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
         "map": by_map,
         "vs": nest(vs),
         "with": nest(with_),
+        "comps": composition_stats(t),
         # Türkçe adlar alınamadıysa eski dosyadakiler kalır. Yalnız bu bantta verisi olan haritalar: sezonun bir bantta oynanmayan
         # haritası (2026-10-19 Eşikte, Hızlı Yolculuk) Türkçe oyunda "okundu" sayılıp haritasız öneriliyordu; dışarıda kalan
         # ad aşağıda nodata'ya girer (bağımsız inceleme 2026-10-19).
@@ -208,8 +231,12 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
     known = set(stats["map"]) | set(stats["tr"])
     if game:
         stats["nodata"] = sorted({n for en, trn in game for n in (en, trn) if n and en not in stats["map"] and n not in known})
+        # Bütün dereceli mod haritalarının Türkçe adı (İngilizce -> Türkçe): sitenin "Bugünün haritaları" bölümü arşivde
+        # olmayan rotasyon haritasını da Türkçe göstersin (2026-10-22 Dungeon Train, Hot Tubs İngilizce kalıyordu).
+        stats["trNames"] = {en: trn for en, trn in game if trn and trn != en}
     else:
-        stats["nodata"] = json.loads(Path(out).read_text(encoding="utf-8")).get("nodata", []) if Path(out).exists() else []
+        prev = json.loads(Path(out).read_text(encoding="utf-8")) if Path(out).exists() else {}
+        stats["nodata"], stats["trNames"] = prev.get("nodata", []), prev.get("trNames", {})
     if fit:
         # Tam kompozisyon kazanma modeli (model.py ile denendi, 2026-10-07): uygulama varsa bunu, yoksa eski puanı kullanır.
         ok = pc.is_valid(t[ELO[0][0]])
@@ -220,6 +247,17 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
     if publish:
         check(stats)
     Path(out).parent.mkdir(exist_ok=True)
+    # Keep the last earlier data day, including across repeated same-day builds.
+    if Path(out).exists():
+        previous = json.loads(Path(out).read_text(encoding="utf-8"))
+        if previous.get("updated", "") < stats.get("updated", ""):
+            total = sum(x[0] for x in previous["all"].values()) / 6
+            rows = sorted(((b, w / g) for b, (g, w) in previous["all"].items()
+                           if g and total and g / total >= .02), key=lambda x: x[1], reverse=True)
+            stats["previousMeta"] = {"date": previous["updated"], "rows": [
+                {"b": b, "wr": wr, "place": i} for i, (b, wr) in enumerate(rows)]}
+        elif previous.get("updated") == stats.get("updated") and previous.get("previousMeta"):
+            stats["previousMeta"] = previous["previousMeta"]
     Path(out).write_text(json.dumps(stats, separators=(",", ":")), encoding="utf-8")
     print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita -> {out}")
 
