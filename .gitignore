@@ -6,3 +6,5 @@
 !/.github/
 !/version.json
 stats/builds.json
+# Özel deponun iş akışı (ios); genel depoya yanlışlıkla eklenmesin.
+/.github/workflows/ios.yml
