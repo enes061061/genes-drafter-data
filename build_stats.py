@@ -8,6 +8,7 @@ Rank = API'nin soloRanked basamağı (1 Bronz I ... 10 Elmas I, 13 Mitik I, 16 E
 aralık verilirse yalnız altı oyuncunun ortalaması bu aralıkta olan setler sayılır.
 """
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -109,7 +110,8 @@ class Model:
             g = XT @ ((w1 + w2) / (1 + np.exp(-z)) - w1) + lam * reg * th
             return loss, g
 
-        self.th = optimize.minimize(f, np.zeros(self.D), jac=True, method="L-BFGS-B", options={"maxiter": 500}).x
+        res = optimize.minimize(f, np.zeros(self.D), jac=True, method="L-BFGS-B", options={"maxiter": 500})
+        self.th, self.ok, self.why = res.x, bool(res.success), f"{res.message} ({res.nit} adım)"
         B, M, th = self.B, self.M, self.th
         self.main = th[:B]
         self.mapb = th[self.o_map:self.o_syn].reshape(M, B)
@@ -244,8 +246,15 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
             ok = pc.and_(ok, pc.is_valid(t[c]))
         mdl = Model(sorted(stats["all"]), sorted(stats["map"]))
         stats["model"] = mdl.fit(*mdl.design(t.filter(ok)), LAM).export()
+        if publish and not mdl.ok and not FORCE:
+            raise ValueError(f"stats yayınlanmadı: model yakınsamadı: {mdl.why}")
     if publish:
         check(stats)
+        if Path(out).exists() and not FORCE:
+            why = drift(json.loads(Path(out).read_text(encoding="utf-8")), stats)
+            if why:
+                raise ValueError(f"stats yayınlanmadı ({Path(out).stem}): {why}. Gerçek değişiklikse (denge güncellemesi, yeni sezon, "
+                                 "SINCE değişti): py -3 meta_refresh.py --force")
     Path(out).parent.mkdir(exist_ok=True)
     # Keep the last earlier data day, including across repeated same-day builds.
     if Path(out).exists():
@@ -275,6 +284,36 @@ def check(stats):
     if m:
         coef = list(m["main"].values()) + [x for k in ("map", "syn", "vs") for inner in m[k].values() for x in inner.values()]
         need(m["main"] and all(np.isfinite(coef)), "model katsayısı boş ya da sonsuz")
+
+
+# Yayındaki dosyaya göre sıçrama kapısı: bozuk bir veri günü (toplayıcı hatası, yarım indirme) kendiliğinden bütün kullanıcılara
+# gitmesin. Eşikler depo geçmişinden (2026-10-29..11-13, üç bant, ~110 yayın): olağan günde %2+ görülen savaşçıların kazanma oranı
+# değişiminin 90. yüzdeliği en çok 0,9 puan, ilk 10'un en az 7'si aynı. Geçmişteki 341 yayından takılanlar yalnız gerçek ve istenen
+# değişimler: yeni sezon (2026-10-16, 2,7-3,4 puan), Efsanevi'nin kendi verisine dönüşü (10-20) ve kaynak değişimi (11-06, 3,2-4,6
+# puan, ilk 10'un 3'ü aynı); böyle günde elle onay (STATS_FORCE=1). Set sayısı ölçü değil: HF alınamayan gün 0,66 kata düşüyor,
+# oranlar aynı kalıyor; azlığı MIN_SETS tutuyor.
+FORCE = bool(os.environ.get("STATS_FORCE"))
+DRIFT_WR, DRIFT_TOP = .025, 5
+
+
+def drift(prev, new):
+    """Yeni dosya yayındakinden olağan dışı farklıysa nedeni, değilse None."""
+    def rates(d):
+        total = sum(g for g, _ in d["all"].values()) / 6
+        return {b: w / g for b, (g, w) in d["all"].items() if g and total and g / total >= .02}
+    a, b = rates(prev), rates(new)
+    common = sorted(abs(a[x] - b[x]) for x in a if x in b)
+    if not common:
+        return "yayındaki dosyayla ortak savaşçı yok"
+    why = []
+    p90 = common[int(len(common) * .9)]
+    if p90 > DRIFT_WR:
+        why.append(f"kazanma oranları toplu kaydı (90. yüzdelik {p90 * 100:.1f} puan)")
+    top = lambda r: set(sorted(r, key=r.get, reverse=True)[:10])
+    same = len(top(a) & top(b))
+    if same < DRIFT_TOP:
+        why.append(f"ilk 10'un yalnız {same}'i aynı")
+    return "; ".join(why) or None
 
 
 def band_ranks(elo, ranks):
