@@ -267,8 +267,21 @@ def main(path, ranks=None, out=STATS_DIR / "gizemli.json", weights=None, tr=None
                 {"b": b, "wr": wr, "place": i} for i, (b, wr) in enumerate(rows)]}
         elif previous.get("updated") == stats.get("updated") and previous.get("previousMeta"):
             stats["previousMeta"] = previous["previousMeta"]
+        # Sitedeki sıra geçmişi grafiği: günde bir {date, p: {savaşçı: sıra}}, son 30 gün. İlk kurulumda previousMeta günüyle başlar.
+        hist = previous.get("metaHistory") or ([{"date": previous["previousMeta"]["date"], "p": {r["b"]: r["place"] for r in previous["previousMeta"]["rows"]}}]
+                                              if previous.get("previousMeta") else [])
+        if previous.get("updated", "") < stats.get("updated", "") and not any(h["date"] == previous["updated"] for h in hist):
+            hist.append({"date": previous["updated"], "p": places(previous)})
+        stats["metaHistory"] = [h for h in hist if h["date"] != stats["updated"]][-29:] + [{"date": stats["updated"], "p": places(stats)}]
     Path(out).write_text(json.dumps(stats, separators=(",", ":")), encoding="utf-8")
     print(f"{t.num_rows} set, {len(stats['all'])} savaşçı, {len(stats['map'])} harita -> {out}")
+
+
+def places(stats):
+    """Sitedeki /meta sıralamasıyla aynı: maçların en az %2'sinde seçilenler kazanma oranına göre (pages.js ranking)."""
+    total = sum(x[0] for x in stats["all"].values()) / 6
+    rows = sorted(((b, w / g) for b, (g, w) in stats["all"].items() if g and total and g / total >= .02), key=lambda x: x[1], reverse=True)
+    return {b: i for i, (b, _) in enumerate(rows)}
 
 
 def check(stats):
